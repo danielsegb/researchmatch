@@ -1,10 +1,10 @@
-# Researchmatch - Academic Researcher Matching System
+# Researchmatch - Identification of Active Researchers in Custom Academic Themes using Bibliometrics and NLP
 
-An intelligent research collaboration platform that uses advanced NLP and machine learning to match researchers based on their publications, expertise, and research interests.
+An intelligent research collaboration software that uses advanced NLP and machine learning to match researchers based on their publications, expertise, and research interests.
 
 ## Overview
 
-Researchmatch solves the challenge of finding relevant researchers and collaborators in academia by analyzing publication data from multiple academic sources, using semantic embeddings to understand research content, and matching researchers based on semantic similarity.
+Researchmatch solves the challenge of finding relevant researchers and collaborators in academia by analysing publication data from multiple academic sources, using semantic embeddings to understand research content, and matching researchers based on semantic similarity.
 
 ## Features
 
@@ -38,7 +38,7 @@ Researchmatch solves the challenge of finding relevant researchers and collabora
 - uploads/ - Folder for uploaded documents
 - tmp/ - Temporary file storage
 
-## Technologies Used
+## System Architecture
 
 - Streamlit for web interface
 - Sentence Transformers for semantic embeddings
@@ -49,8 +49,8 @@ Researchmatch solves the challenge of finding relevant researchers and collabora
 
 ## Usage
 
-Run the application and access it in your browser. Use the sidebar to build your corpus or match researchers by entering keywords or uploading documents.
+Run the application using the terminal with "streamlit run app.py" and access it in your browser. Use the sidebar to build your corpus or match researchers by entering keywords or uploading documents.
 
 ## License
 
-Academic Project - MSc Research
+Academic Project - MSc Research at Bangor University
