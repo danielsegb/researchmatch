@@ -1,4 +1,7 @@
-"""Researchmatch — Optimized (~500 lines total, all functionality preserved)"""
+"""Researchmatch App built with Streamlit for graphical interface.
+This application helps users find relevant researchers by analysing text from keywords 
+or uploaded documents. It classifies papers or keywords into themes and retrieves matching profiles 
+from the database of preprocessed research data and metadata."""
 import os
 import streamlit as st
 import pandas as pd
@@ -25,7 +28,7 @@ def load_spacy_cached():
     return nlp
 
 # Sidebar
-st.title("🎯 Researchmatch — Match Researchers")
+st.title("Researchmatch APP")
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -35,7 +38,7 @@ with st.sidebar:
     model_name = st.text_input("Embedding model", "sentence-transformers/all-MiniLM-L6-v2")
     
     st.markdown("---")
-    with st.expander("📥 Build Corpus", expanded=False):
+    with st.expander("Build Corpus", expanded=False):
         topic = st.text_input("Topic", key="topic")
         col1, col2 = st.columns(2)
         with col1:
@@ -46,7 +49,7 @@ with st.sidebar:
         run_build = st.button("Run Build", key="run_build")
     
     st.markdown("---")
-    with st.expander("🧮 Precompute", expanded=False):
+    with st.expander("Precompute", expanded=False):
         run_precompute = st.button("Compute Embeddings", key="run_precompute")
 
 # Admin: Build corpus
@@ -73,26 +76,26 @@ if run_build:
     
     # Insert
     inserted, skipped = insert_profiles(coll, all_profiles)
-    st.sidebar.success(f"✅ Inserted: {inserted}, Skipped: {skipped}")
+    st.sidebar.success(f"Inserted: {inserted}, Skipped: {skipped}")
     for k, v in stats.items(): st.sidebar.metric(k.title(), v)
 
 # Admin: Precompute
 if run_precompute:
     count = compute_embeddings(get_collection(mongo_uri, db_name, coll_name), load_model_cached(model_name), 
                                progress_callback=lambda x: st.sidebar.progress(x))
-    st.sidebar.success(f"✅ Computed {count} embeddings")
+    st.sidebar.success(f"Computed {count} embeddings")
 
 # Main: Match
 st.subheader("Match Researchers")
-st.caption("Enter keywords, upload files, or both. Multiple uploads are clustered into themes.")
+st.caption("Enter keywords or upload files to get started.")
 
-kw_text = st.text_area("Keywords / abstract (optional)", "")
+kw_text = st.text_area("Keywords / abstract", "")
 ups = st.file_uploader("Upload PDF/DOCX", type=["pdf", "docx"], accept_multiple_files=True)
 
 col_a, col_b = st.columns(2)
-top_k = col_a.slider("Top K per theme", 5, 50, 15)
+top_k = col_a.slider("Top matches per theme", 5, 50, 15)
 sort_opt = col_b.selectbox("Sort", ["Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
-run_match = st.button("🚀 Run Matching (Fast Mode)")
+run_match = st.button("Search ")
 
 # Matching
 if run_match:
@@ -117,7 +120,7 @@ if run_match:
     if not corpus_embs:
         st.warning("No corpus available")
     else:
-        with st.spinner("🔍 Building themes and matching researchers..."):
+        with st.spinner("Building themes and matching researchers..."):
             # Build themes
             if raw_texts and len(raw_texts) >= 2:
                 themes = cluster_upload_docs(raw_texts, model, nlp)
@@ -147,7 +150,7 @@ if run_match:
             df = pd.DataFrame(all_rows)
             st.session_state["match_results"] = df
             st.session_state["match_themes"] = list(df["Theme"].unique())
-            st.success("✅ Matching complete")
+            st.success("Matching complete")
         else:
             st.warning("No matches found")
 
@@ -170,6 +173,6 @@ if "match_results" in st.session_state:
     show_df.index = show_df.index + 1  # Start serial numbers from 1
     
     st.dataframe(show_df, use_container_width=True)
-    st.download_button("📥 Download CSV", show_df.to_csv(index=True).encode("utf-8"), "matches.csv", "text/csv")
+    st.download_button("Download CSV", show_df.to_csv(index=True).encode("utf-8"), "matches.csv", "text/csv")
 else:
-    st.info("Set query and click **Run Matching**")
+    st.info("Set query and click **Search to find matches**")
