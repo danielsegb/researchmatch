@@ -1,4 +1,4 @@
-"""MongoDB operations with connection pooling."""
+"""MongoDB operations and connection."""
 import logging
 from typing import List, Dict, Tuple
 from pymongo import MongoClient, UpdateOne
@@ -6,7 +6,7 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
-# Singleton client (fixes connection leak)
+# Singleton client (fixes connection failure)
 get_mongo_client = lambda uri: st.session_state.setdefault("mongo_client", MongoClient(uri))
 get_collection = lambda uri, db, coll: get_mongo_client(uri)[db][coll]
 profile_key = lambda p: (p.get("name", "").strip().lower(), (p.get("orcid") or "").strip().lower())
@@ -55,7 +55,7 @@ def compute_embeddings(coll, model, batch_size: int = 64, progress_callback=None
     return len(payload)
 
 def load_corpus(coll, model) -> Tuple[List[List[float]], List[Dict]]:
-    """Load corpus embeddings and metadata. Compute missing embeddings on-the-fly."""
+    """Load corpus embeddings and metadata and compute missing embeddings."""
     from core import combine_researcher_text
     
     cursor = coll.find({}, {"name": 1, "institution": 1, "orcid": 1, "publications": 1, "embedding": 1})
