@@ -90,7 +90,7 @@ def enrich_with_crossref(publications: List[Dict], progress=None) -> List[Dict]:
     return publications
 
 def download_and_extract_pdf(pdf_url: str, save_dir: str = "pdfs") -> str:
-    """Download PDF and extract text with SSRF protection."""
+    """Download PDF and extract text with SSRF (Server Side Request Forgery) protection."""
     parsed = urlparse(pdf_url)
     if parsed.hostname in ["localhost", "127.0.0.1"] or (parsed.hostname or "").startswith("192.168."):
         logger.warning(f"Blocked internal URL: {pdf_url}")
@@ -181,7 +181,7 @@ def combine_researcher_text(researcher: dict, max_chars: int = MAX_CHARS) -> str
     return combined.strip()
 
 def fetch_and_enrich_openalex(results: List[Dict], progress=None) -> List[Dict]:
-    """Unified function to enrich OpenAlex results with CrossRef and full-text."""
+    """Function to enrich OpenAlex results with CrossRef and full-text."""
     enriched = enrich_with_crossref(results, progress=progress)
     for rec in enriched:
         if rec.get("pdf_url") and (ft := download_and_extract_pdf(rec["pdf_url"])):
