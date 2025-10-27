@@ -1,189 +1,217 @@
-"""Core functions for text processing, file I/O, and API calls."""
+"""
+Core utilities: file I/O, API interactions, and data transformation.
+"""
 import os
 import re
 import time
 import logging
 from typing import List, Dict, Optional
 import requests
-import fitz
+import fitz # PyMuPDF
 from bs4 import BeautifulSoup
 from urllib.parse import quote, urlparse
-from docx import Document
+from docx import Document # python-docx
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Constants
 STOPWORDS = set("a an and are as at be but by for from has have if in into is it its of on or than that the their them then there these they this to was were will with within without using used based among between across under over via while due can could should would may might".split())
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z\-]{2,}")
-API_TIMEOUT, API_DELAY, MAX_CHARS = 30, 0.25, 60000
+API_TIMEOUT, API_DELAY, MAX_CHARS = 30, 0.15, 60000
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-# Text processing
-normalize_ws = lambda text: re.sub(r"\s+", " ", (text or "")).strip()
-tokenize_words = lambda text: [t for t in TOKEN_RE.findall(text.lower()) if t not in STOPWORDS]
+def normalize_ws(text: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (text or "")).strip()
 
-# File I/O - Merged extract functions
+def tokenize_words(text: str) -> List[str]:
+    return [t for t in TOKEN_RE.findall(text.lower()) if t not in STOPWORDS]
+
 def extract_text(filepath: str) -> str:
-    """Extract text from PDF or DOCX file."""
     try:
-        if filepath.endswith('.pdf'):
-            doc = fitz.open(filepath)
-            text = " ".join([page.get_text() for page in doc])
-            doc.close()
-            return text.strip()
-        else:  # .docx
+        if filepath.lower().endswith('.pdf'):
+            with fitz.open(filepath) as doc:
+                return " ".join([page.get_text() for page in doc]).strip()
+        elif filepath.lower().endswith('.docx'):
             return " ".join([p.text for p in Document(filepath).paragraphs]).strip()
+        logger.warning(f"Unsupported file type: {filepath}")
+        return ""
     except Exception as e:
-        logger.error(f"Text extraction failed for {filepath}: {e}")
+        logger.error(f"Text extraction failed: {e}")
         return ""
 
 def safe_file_upload(uploaded_file, tmp_dir: str = "tmp") -> Optional[str]:
-    """Safely handle file upload with path traversal protection."""
+    if not uploaded_file:
+        return None
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_path = os.path.join(tmp_dir, os.path.basename(uploaded_file.name))
+    safe_filename = re.sub(r'[\\/*?:"<>|]', "", os.path.basename(uploaded_file.name))
+    tmp_path = os.path.join(tmp_dir, safe_filename)
     try:
         with open(tmp_path, "wb") as f:
-            f.write(uploaded_file.read())
+            for chunk in uploaded_file:
+                f.write(chunk)
         return tmp_path
     except Exception as e:
         logger.error(f"File upload failed: {e}")
         return None
 
-# API calls
 def query_openalex(topic: str, pages: int = 2, per_page: int = 25, progress=None, filters: Optional[str] = None) -> List[Dict]:
-    """Query OpenAlex API with optional filters."""
     results = []
+    base_url = "https://api.openalex.org/works"
+    
     for page in range(1, pages + 1):
         params = {"per-page": per_page, "page": page}
         if topic: params["search"] = topic
         if filters: params["filter"] = filters
+        
         try:
-            r = requests.get("https://api.openalex.org/works", params=params, timeout=API_TIMEOUT)
-            if r.status_code == 200:
-                results.extend(r.json().get("results", []))
+            r = requests.get(base_url, params=params, timeout=API_TIMEOUT, headers=HEADERS)
+            r.raise_for_status()
+            data = r.json()
+            page_results = data.get("results", [])
+            results.extend(page_results)
+            if len(page_results) < per_page:
+                break
         except Exception as e:
             logger.error(f"OpenAlex query failed: {e}")
-        if progress: progress.progress(page / pages)
+
+        if progress:
+             progress.progress(min(1.0, page / pages))
         time.sleep(API_DELAY)
+        
     return results
 
 def crossref_by_title(title: str) -> Optional[Dict]:
-    """Query CrossRef for publication metadata by title."""
+    if not title:
+        return None
     try:
-        return requests.get(f"https://api.crossref.org/works?query.title={quote(title)}", 
-                          timeout=20).json().get("message", {}).get("items", [None])[0]
+        params = {'query.title': title, 'mailto': 'research@example.com'}
+        response = requests.get("https://api.crossref.org/works", params=params, timeout=20, headers=HEADERS)
+        response.raise_for_status()
+        items = response.json().get("message", {}).get("items", [])
+        if items and title.lower() in items[0].get("title", [""])[0].lower():
+            return items[0]
+        return None
     except Exception as e:
-        logger.error(f"CrossRef query failed for '{title}': {e}")
+        logger.warning(f"CrossRef query failed: {e}")
         return None
 
 def enrich_with_crossref(publications: List[Dict], progress=None) -> List[Dict]:
-    """Enrich publications with CrossRef metadata and PDF links."""
-    for i, pub in enumerate(publications, start=1):
+    for i, pub in enumerate(publications):
         if title := pub.get("title"):
             if item := crossref_by_title(title):
                 pub["crossref"] = item
-                if link := next((l.get("URL") for l in item.get("link", []) 
-                               if l.get("content-type") == "application/pdf"), None):
-                    pub["pdf_url"] = link
-        if progress: progress.progress(i / (len(publications) or 1))
-        time.sleep(0.12)
+                pdf_link = next((str(l.get("URL")) for l in item.get("link", []) 
+                                if l.get("URL") and l.get("content-type") == "application/pdf"), None)  # Extract PDF URL from CrossRef metadata
+                if pdf_link:
+                    pub["pdf_url"] = pdf_link
+                if not pub.get("doi") and item.get("DOI"):
+                     pub["doi"] = item.get("DOI")
+        if progress:
+             progress.progress((i + 1) / len(publications))
+        time.sleep(API_DELAY * 0.5)
     return publications
 
 def download_and_extract_pdf(pdf_url: str, save_dir: str = "pdfs") -> str:
-    """Download PDF and extract text with SSRF (Server Side Request Forgery) protection."""
-    parsed = urlparse(pdf_url)
-    if parsed.hostname in ["localhost", "127.0.0.1"] or (parsed.hostname or "").startswith("192.168."):
-        logger.warning(f"Blocked internal URL: {pdf_url}")
-        return ""
-    
-    os.makedirs(save_dir, exist_ok=True)
     try:
-        filename = os.path.join(save_dir, pdf_url.split("?")[0].split("/")[-1] or "paper.pdf")
-        r = requests.get(pdf_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 200 and r.content:
+        parsed = urlparse(pdf_url)
+        if parsed.hostname in ["localhost", "127.0.0.1"] or (parsed.hostname or "").startswith(("192.168.", "10.", "172.16.")):  # Block local/private IPs for security
+            return ""
+        
+        os.makedirs(save_dir, exist_ok=True)
+        base_name = os.path.basename(parsed.path) if parsed.path else "paper"
+        sanitized_name = re.sub(r'[\\/*?:"<>|]', "_", base_name)
+        if not sanitized_name.lower().endswith('.pdf'):
+             sanitized_name = os.path.splitext(sanitized_name)[0] + ".pdf"
+        if len(sanitized_name) > 100:
+             name_part, ext = os.path.splitext(sanitized_name)
+             sanitized_name = name_part[:100 - len(ext)] + ext
+
+        filename = os.path.join(save_dir, sanitized_name)
+        r = requests.get(pdf_url, timeout=20, headers=HEADERS, stream=True)
+        r.raise_for_status()
+
+        if "application/pdf" in r.headers.get("Content-Type", "").lower():
             with open(filename, "wb") as f:
-                f.write(r.content)
+                 for chunk in r.iter_content(chunk_size=8192):
+                      f.write(chunk)
             return extract_text(filename)
+        return ""
     except Exception as e:
-        logger.error(f"PDF download failed for {pdf_url}: {e}")
-    return ""
+        logger.warning(f"PDF download failed: {e}")
+        return ""
 
-def scrape_doaj(topic: str, pages: int = 1, progress=None) -> List[Dict]:
-    """Scrape DOAJ for open access articles."""
-    scraped = []
-    for page in range(1, pages + 1):
-        try:
-            soup = BeautifulSoup(requests.get(
-                f"https://www.doaj.org/search/articles?ref=homepage&q={quote(topic)}&page={page}", 
-                timeout=20, headers={"User-Agent": "Mozilla/5.0"}).content, "html.parser")
-            for c in soup.select("div.search-result"):
-                if t := c.select_one("h3 a"):
-                    abstract = c.select_one("div.abstract")
-                    scraped.append({"source": "DOAJ", "title": t.get_text(strip=True),
-                                  "link": "https://www.doaj.org" + t.get("href", ""),
-                                  "abstract": abstract.get_text(strip=True) if abstract else "", 
-                                  "topic": topic})
-        except Exception as e:
-            logger.error(f"DOAJ scrape failed: {e}")
-        if progress: progress.progress(page / pages)
-        time.sleep(API_DELAY)
-    return scraped
 
-# Profile processing
 def reconstruct_openalex_abstract(abstract_raw) -> str:
-    """Reconstruct abstract from OpenAlex inverted index format."""
     if isinstance(abstract_raw, dict):
-        positions = [(i, word) for word, idxs in abstract_raw.items() for i in idxs]
-        return " ".join([w for _, w in sorted(positions)])
+        try:
+            word_map = {}  # Reconstruct abstract from OpenAlex's inverted index format
+            for word, indices in abstract_raw.items():
+                for index in indices:
+                    word_map[index] = word
+            if not word_map:
+                return ""
+            return " ".join(word_map.get(i, "") for i in range(max(word_map.keys()) + 1))
+        except Exception as e:
+            logger.error(f"Abstract reconstruction failed: {e}")
+            return ""
     return str(abstract_raw) if abstract_raw else ""
 
 def openalex_to_profiles(openalex_results: List[Dict]) -> List[Dict]:
-    """Convert OpenAlex results to researcher profiles."""
     profiles = {}
     for record in openalex_results:
-        title, doi = record.get("title"), record.get("doi", "")
-        year = record.get("publication_year")
-        if not year and (pub_date := record.get("publication_date")):
-            year = int(m.group(1)) if (m := re.match(r"(\d{4})", str(pub_date))) else None
+        if not (title := record.get("title")):
+            continue
+
+        abstract_text = reconstruct_openalex_abstract(record.get("abstract_inverted_index"))
+        doi = record.get("doi") or ""
         
-        abstract_text = reconstruct_openalex_abstract(
-            record.get("abstract_inverted_index") or record.get("abstract"))
-        
-        for author in record.get("authorships", []):
-            aobj = author.get("author") or {}
-            name, orcid = aobj.get("display_name", "Unknown"), aobj.get("orcid")
-            inst_list = author.get("institutions", [])
-            institution = inst_list[0].get("display_name", "Unknown Institution") if inst_list else "Unknown Institution"
+        try:
+            pub_year = int(record.get("publication_year")) if record.get("publication_year") else None
+        except (ValueError, TypeError):
+             pub_year = None
+
+        for authorship in record.get("authorships", []):
+            author_info = authorship.get("author")
+            if not author_info or not author_info.get("display_name"):
+                continue
+
+            name = author_info["display_name"]
+            orcid = author_info.get("orcid")
+            inst_list = authorship.get("institutions", [])
+            institution = inst_list[0].get("display_name") if inst_list and inst_list[0].get("display_name") else "Unknown"
             
             key = f"{name}|{orcid or ''}"
             if key not in profiles:
                 profiles[key] = {"name": name, "orcid": orcid, "institution": institution, "publications": []}
-            profiles[key]["publications"].append({"title": title, "doi": doi, "abstract": abstract_text, "year": year})
+            
+            profiles[key]["publications"].append({
+                "title": title, "doi": doi, "abstract": abstract_text, "year": pub_year
+            })
+            
     return list(profiles.values())
 
-def tag_publications(profiles: List[Dict], source: str, topic: Optional[str] = None, 
-                    seed: Optional[str] = None, enrich_note: Optional[str] = None):
-    """Mutates profiles in-place by adding tags to publications."""
+def tag_publications(profiles: List[Dict], source: str, **kwargs):
     for p in profiles:
         for pub in p.get("publications", []):
-            pub.update({"source": source} | 
-                      ({k: v for k, v in [("topic", topic), ("seed_source", seed), 
-                                         ("enrichment", enrich_note)] if v}))
+            pub["source"] = source
+            for k, v in kwargs.items():
+                if v:
+                    pub[k] = v
 
 def combine_researcher_text(researcher: dict, max_chars: int = MAX_CHARS) -> str:
-    """Combine all publication texts for a researcher with smart truncation."""
-    combined = " ".join(filter(None, [(p.get("full_text") or p.get("abstract") or "").strip() 
-                                      for p in researcher.get("publications", [])]))
-    if len(combined) > max_chars:
-        combined = combined[:max_chars]
-        if (last_period := combined.rfind(". ")) > max_chars * 0.8:
-            combined = combined[:last_period + 1]
-    return combined.strip()
+    texts = [text.strip() for p in researcher.get("publications", []) 
+             if (text := p.get("full_text") or p.get("abstract") or p.get("title"))]  # Prioritize full_text > abstract > title
+    combined = " ".join(texts)
+    if len(combined) <= max_chars:
+        return combined
+    truncated = combined[:max_chars]
+    last_period = truncated.rfind(". ")
+    return truncated[:last_period + 1] if last_period > max_chars * 0.8 else truncated
 
 def fetch_and_enrich_openalex(results: List[Dict], progress=None) -> List[Dict]:
-    """Function to enrich OpenAlex results with CrossRef and full-text."""
-    enriched = enrich_with_crossref(results, progress=progress)
-    for rec in enriched:
-        if rec.get("pdf_url") and (ft := download_and_extract_pdf(rec["pdf_url"])):
-            rec["full_text"] = ft
-    return enriched
+    enriched_results = enrich_with_crossref(results, progress=progress)
+    for rec in enriched_results:
+        if pdf_url := rec.get("pdf_url"):
+            if full_text := download_and_extract_pdf(pdf_url):
+                rec["full_text"] = full_text
+    return enriched_results
