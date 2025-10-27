@@ -1,178 +1,283 @@
-"""Researchmatch App built with Streamlit for graphical interface.
-This application helps users find relevant researchers by analysing text from keywords 
-or uploaded documents. It classifies papers or keywords into themes and retrieves matching profiles 
-from the database of preprocessed research data and metadata."""
+"""
+ResearchMatch: Intelligent semantic search App for discovering researchers and academic collaborators.
+"""
 import os
+import base64
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import io
 
 from core import normalize_ws, extract_text, safe_file_upload
 from services import derive_top_keywords_hybrid, cluster_upload_docs, discover_profiles_from_upload
 from services import build_corpus_from_keywords
-from database import get_collection, insert_profiles, compute_embeddings, load_corpus
+from database import get_collection, insert_profiles, compute_embeddings
 
-st.set_page_config(page_title="Researchmatch", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ResearchMatch", layout="wide", initial_sidebar_state="collapsed")
 
-# Model cache
-@st.cache_resource
+LOGO_SVG = """
+<svg width="100" height="100" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2ZM18 20H6V4H13V9H18V20Z" fill="#cccccc"/>
+<path d="M10.29 17.71L12 16L13.71 17.71L15.12 16.29L13.41 14.58L15.12 12.87L13.71 11.46L12 13.17L10.29 11.46L8.88 12.87L10.59 14.58L8.88 16.29L10.29 17.71Z" fill="#4A90E2"/>
+<path d="M15 13H20V15H15V13Z" fill="#4A90E2"/>
+<path d="M15 16H20V18H15V16Z" fill="#4A90E2"/>
+<path d="M8 10H12V12H8V10Z" fill="#4A90E2"/>
+</svg>
+"""
+col1, col2 = st.columns([1, 10])
+with col1:
+    b64_logo = base64.b64encode(LOGO_SVG.encode()).decode()
+    st.markdown(f'<img src="data:image/svg+xml;base64,{b64_logo}" width="80">', unsafe_allow_html=True)
+with col2:
+    st.title("ResearchMatch")
+    st.caption("Semantic Discovery App for Academic Collaboration")
+
+st.markdown("""
+**ResearchMatch** uses semantic search to discover researchers whose work aligns with your research interests.
+
+**User Guide:**
+1. Upload papers or enter research topic or abstract to get started
+2. Click Search to find matching researchers
+3. Explore profile keywords and publications ranked by relevance
+""")
+st.markdown("---")
+
+@st.cache_resource(show_spinner="Loading semantic search models...")
 def load_model_cached(model_name):
     return SentenceTransformer(model_name)
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_spacy_cached():
     import spacy
     nlp = spacy.load("en_core_web_sm", disable=["ner"])
     nlp.max_length = 2000000
     return nlp
 
-# Sidebar
-st.title("Researchmatch APP")
-
 with st.sidebar:
-    st.header("⚙️ Settings")
-    mongo_uri = st.text_input("MongoDB URI", "mongodb://localhost:27017")
-    db_name, coll_name = st.text_input("Database", "researchmatch"), st.text_input("Collection", "researchers")
-    uploads_folder = st.text_input("Uploads folder", "uploads")
-    model_name = st.text_input("Embedding model", "sentence-transformers/all-MiniLM-L6-v2")
+    st.header("Admin Panel")
+    mongo_uri = st.text_input("MongoDB URI", "mongodb+srv://researchmatch_user:jqz_2Pe4HbUsjgu@cluster0.xiw7sji.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+    db_name, coll_name = st.text_input("Database Name", "researchmatch"), st.text_input("Collection Name", "researchers")
+    uploads_folder = st.text_input("Local Uploads Folder", "uploads")
+    model_name = st.text_input("Embedding Model", "sentence-transformers/all-MiniLM-L6-v2")
     
-    st.markdown("---")
-    with st.expander("Build Corpus", expanded=False):
+    with st.expander("Build Corpus"):
         topic = st.text_input("Topic", key="topic")
-        col1, col2 = st.columns(2)
-        with col1:
-            pages, doaj_pages = st.number_input("OpenAlex pages", 1, 20, 2, key="pages"), st.number_input("DOAJ pages", 0, 5, 0, key="doaj")
-        with col2:
-            per_page, upload_pages = st.number_input("Per page", 10, 200, 25, key="per_page"), st.number_input("Upload pages", 1, 5, 1, key="up_pages")
-        
-        run_build = st.button("Run Build", key="run_build")
+        c1, c2 = st.columns(2)
+        pages = c1.number_input("OpenAlex Pages", 1, 20, 2)
+        doaj_pages = c1.number_input("DOAJ Pages", 0, 5, 0)
+        per_page = c2.number_input("Results Per Page", 10, 200, 25)
+        upload_pages = c2.number_input("Pages per Upload", 1, 5, 1)
+        run_build = st.button("Process Build", key="run_build")
     
-    st.markdown("---")
-    with st.expander("Precompute", expanded=False):
+    with st.expander("Precompute Embeddings"):
         run_precompute = st.button("Compute Embeddings", key="run_precompute")
 
-# Admin: Build corpus
 if run_build:
     model, nlp = load_model_cached(model_name), load_spacy_cached()
     coll = get_collection(mongo_uri, db_name, coll_name)
-    all_profiles, stats = [], {"openalex": 0, "doaj": 0, "uploads": 0}
-    
-    # Keywords
-    if topic:
-        profiles = build_corpus_from_keywords(topic, pages, per_page, doaj_pages, 
-                                             st.sidebar.progress(0.0, text="OpenAlex..."))
-        all_profiles.extend(profiles)
-        stats["openalex"] = len(profiles)
-    
-    # Uploads
-    if os.path.exists(uploads_folder):
-        for fname in os.listdir(uploads_folder):
-            if not os.path.isfile(fpath := os.path.join(uploads_folder, fname)): continue
-            if text := extract_text(fpath):
-                profiles, _ = discover_profiles_from_upload(text, upload_pages, per_page, fname, model, nlp)
-                all_profiles.extend(profiles)
-                stats["uploads"] += len(profiles)
-    
-    # Insert
-    inserted, skipped = insert_profiles(coll, all_profiles)
-    st.sidebar.success(f"Inserted: {inserted}, Skipped: {skipped}")
-    for k, v in stats.items(): st.sidebar.metric(k.title(), v)
+    if coll is not None:
+        all_profiles, stats = [], {"openalex": 0, "doaj": 0, "uploads": 0}
+        if topic:
+            profiles = build_corpus_from_keywords(topic, pages, per_page, doaj_pages, st.sidebar.progress(0.0, text="Querying APIs..."))
+            all_profiles.extend(profiles)
+            stats["openalex"] = len(profiles)
+        if os.path.exists(uploads_folder):
+            st.sidebar.text(f"Scanning '{uploads_folder}'...")
+            for fname in os.listdir(uploads_folder):
+                fpath = os.path.join(uploads_folder, fname)
+                if not os.path.isfile(fpath): continue
+                if text := extract_text(fpath):
+                    profiles, _ = discover_profiles_from_upload(text, upload_pages, per_page, fname, model, nlp)
+                    all_profiles.extend(profiles)
+                    stats["uploads"] += len(profiles)
+        inserted, skipped = insert_profiles(coll, all_profiles)
+        st.sidebar.success(f"Inserted: {inserted}, Skipped: {skipped}")
+        for k, v in stats.items(): st.sidebar.metric(k.title(), v)
 
-# Admin: Precompute
 if run_precompute:
-    count = compute_embeddings(get_collection(mongo_uri, db_name, coll_name), load_model_cached(model_name), 
-                               progress_callback=lambda x: st.sidebar.progress(x))
-    st.sidebar.success(f"Computed {count} embeddings")
+    model, nlp, coll = load_model_cached(model_name), load_spacy_cached(), get_collection(mongo_uri, db_name, coll_name)
+    if coll is not None:
+        progress_bar = st.sidebar.progress(0.0)
+        status_text = st.sidebar.empty()
+        
+        def update_progress(progress):
+            progress_bar.progress(min(progress, 1.0))
+            status_text.info(f"Computing embeddings... {int(progress * 100)}%")
+        
+        count = compute_embeddings(coll, model, nlp, progress_callback=update_progress)
+        progress_bar.progress(1.0)
+        status_text.success(f"Processed {count:,} profiles.")
 
-# Main: Match
 st.subheader("Match Researchers")
-st.caption("Enter keywords or upload files to get started.")
-
-kw_text = st.text_area("Keywords / abstract", "")
 ups = st.file_uploader("Upload PDF/DOCX", type=["pdf", "docx"], accept_multiple_files=True)
-
+kw_text = st.text_area("Keywords / Abstract", "")
 col_a, col_b = st.columns(2)
-top_k = col_a.slider("Top matches per theme", 5, 50, 15)
-sort_opt = col_b.selectbox("Sort", ["Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
-run_match = st.button("Search ")
+top_k = col_a.slider("Number of Results", 5, 50, 15)
+sort_opt = col_b.selectbox("Sort Results By", ["Match Score (desc)", "Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
+run_match = st.button("Search")
 
-# Matching
 if run_match:
     st.session_state.pop("match_results", None)
     st.session_state.pop("match_themes", None)
     
-    # Extract uploads
     raw_texts = []
     if ups:
         for up in ups:
             if tmp_path := safe_file_upload(up):
                 raw_texts.append(normalize_ws(extract_text(tmp_path)))
-                try: os.remove(tmp_path)
-                except: pass
+                try:
+                    os.remove(tmp_path)
+                except:
+                    pass
     
-    # Load corpus
-    with st.spinner("⚙️ Loading models and corpus..."):
-        model, nlp = load_model_cached(model_name), load_spacy_cached()
-        coll = get_collection(mongo_uri, db_name, coll_name)
-        corpus_embs, meta = load_corpus(coll, model)
+    model, nlp, coll = load_model_cached(model_name), load_spacy_cached(), get_collection(mongo_uri, db_name, coll_name)
     
-    if not corpus_embs:
-        st.warning("No corpus available")
-    else:
-        with st.spinner("Building themes and matching researchers..."):
-            # Build themes
-            if raw_texts and len(raw_texts) >= 2:
-                themes = cluster_upload_docs(raw_texts, model, nlp)
-                if kw_text.strip():
-                    for th in themes:
-                        th["combined_text"] = normalize_ws(kw_text) + " " + th["combined_text"]
-            else:
-                if not (combined := (normalize_ws(kw_text) + " " + " ".join(raw_texts)).strip()):
-                    st.warning("Enter keywords or upload files")
-                    st.stop()
-                themes = [{"theme_label": ", ".join(derive_top_keywords_hybrid(combined, k=3, model=model, nlp=nlp)) or "Theme 1",
-                          "doc_indices": [], "combined_text": combined}]
+    if coll is None:
+        st.error("Database connection failed.")
+        st.stop()
+        
+    with st.spinner("Analysing query and searching database..."):
+        if raw_texts and len(raw_texts) >= 2:
+            themes = cluster_upload_docs(raw_texts, model, nlp)  # Cluster multiple documents into themes
+            if kw_text.strip():
+                for th in themes:
+                    th["combined_text"] = normalize_ws(kw_text) + " " + th["combined_text"]
+        else:
+            combined_text = (normalize_ws(kw_text) + " " + " ".join(raw_texts)).strip()  # Single theme from keywords + single doc
+            if not combined_text:
+                st.warning("Please enter keywords or upload files to start a search.")
+                st.stop()
+            themes = [{"theme_label": ", ".join(derive_top_keywords_hybrid(combined_text, k=3, model=model, nlp=nlp)) or "Primary Theme",
+                      "doc_indices": [], "combined_text": combined_text}]
+        
+        all_rows = []
+        for th in themes:
+            query_embedding = model.encode([th["combined_text"]], convert_to_tensor=False, normalize_embeddings=True)[0].tolist()
             
-            # Match (Fast mode)
-            corpus = np.array(corpus_embs)
-            all_rows = []
-            for th in themes:
-                sims = np.dot(corpus, model.encode([th["combined_text"]], convert_to_tensor=False, normalize_embeddings=True)[0])
-                for idx in np.argsort(-sims)[:top_k]:
-                    m = meta[idx]
-                    all_rows.append({"Theme": th["theme_label"], "Name": m["name"], 
-                                    "Institution": m["institution"], "ORCID": m["orcid"],
-                                    "Publication Count": m["publication_count"], 
-                                    "Last Publication Year": m["last_publication_year"]})
+            try:
+                # Perform vector search
+                aggregation_pipeline = [
+                    {"$vectorSearch": {
+                        "index": "default_vector_index", "queryVector": query_embedding,
+                        "path": "embedding", "numCandidates": top_k * 15, "limit": top_k}}  # 15x candidates for better recall
+                    ,
+                    {"$project": {
+                        "_id": 1, "name": 1, "institution": 1, "orcid": 1,
+                        "profile_keywords": 1, "score": {"$meta": "vectorSearchScore"}}}
+                ]
+                results = list(coll.aggregate(aggregation_pipeline))
+            except Exception as e:
+                st.error(f"Vector search failed: {e}")
+                st.stop()
+
+            for m in results:
+                try:
+                    full_doc = coll.find_one({"_id": m.get("_id")}, {
+                        "publications.title": 1, "publications.doi": 1,
+                        "publications.year": 1, "publications.embedding": 1
+                    })
+                    pub_list = full_doc.get("publications", []) if full_doc else []
+                except Exception:
+                    pub_list = []
+                
+                years = [p.get("year") for p in pub_list if p.get("year") and isinstance(p.get("year"), int)]
+                
+                all_rows.append({
+                    "Theme": th["theme_label"], "Name": m.get("name", "Unknown"),
+                    "Institution": m.get("institution", ""), "ORCID": m.get("orcid", ""),
+                    "Score": m.get("score", 0), "Publication Count": len(pub_list),
+                    "Last Publication Year": max(years) if years else None,
+                    "Profile_Keywords": m.get("profile_keywords", []), "Publications": pub_list})
         
         if all_rows:
-            df = pd.DataFrame(all_rows)
-            st.session_state["match_results"] = df
-            st.session_state["match_themes"] = list(df["Theme"].unique())
-            st.success("Matching complete")
+            st.session_state["match_results"] = pd.DataFrame(all_rows)
+            st.session_state["match_themes"] = themes
+            st.success("Search complete. See results below.")
         else:
-            st.warning("No matches found")
+            st.warning("No matches found for your query.")
 
-# Render results
 if "match_results" in st.session_state:
-    df, themes = st.session_state["match_results"].copy(), st.session_state.get("match_themes", [])
-    choice = st.selectbox("Theme", ["All themes"] + sorted(themes))
+    df = st.session_state["match_results"].copy()
+    themes = st.session_state.get("match_themes", [])
+    theme_labels = sorted([th["theme_label"] for th in themes])
+    choice = st.selectbox("Filter by Theme", ["All themes"] + theme_labels)
     filtered = df if choice == "All themes" else df[df["Theme"] == choice]
     
-    # Sort
-    sort_map = {
-        "Last Publication Year (desc)": (["Theme", "Last Publication Year", "Publication Count", "Name"], [True, False, False, True]),
-        "Publication Count (desc)": (["Theme", "Publication Count", "Last Publication Year", "Name"], [True, False, False, True]),
-        "Name (A→Z)": (["Theme", "Name"], [True, True])
-    }
-    cols, asc = sort_map[sort_opt]
-    filtered = filtered.sort_values(cols, ascending=asc, na_position="last")
+    sort_map = {"Match Score (desc)": ("Score", False), "Last Publication Year (desc)": ("Last Publication Year", False),
+                "Publication Count (desc)": ("Publication Count", False), "Name (A→Z)": ("Name", True)}
+    sort_col, sort_asc = sort_map[sort_opt]
+    filtered["Last Publication Year"] = pd.to_numeric(filtered["Last Publication Year"], errors='coerce')
+    filtered = filtered.sort_values(sort_col, ascending=sort_asc, na_position="last").reset_index(drop=True)
     
-    show_df = filtered.drop(columns=["Theme"], errors="ignore").reset_index(drop=True)
-    show_df.index = show_df.index + 1  # Start serial numbers from 1
+    csv_df = filtered.drop(columns=["Score", "Publications", "Profile_Keywords"])
+    csv_output = io.StringIO()
+    csv_df.to_csv(csv_output, index=False)
     
-    st.dataframe(show_df, use_container_width=True)
-    st.download_button("Download CSV", show_df.to_csv(index=True).encode("utf-8"), "matches.csv", "text/csv")
+    st.download_button("Download Results as CSV", data=csv_output.getvalue(),
+                      file_name="researchmatch_results.csv", mime="text/csv")
+
+    model = load_model_cached(model_name)
+
+    for i, row in enumerate(filtered.itertuples()):
+        st.markdown("---")
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.subheader(f"{i + 1}. {row.Name}")
+            st.markdown(f"**Institution:** {row.Institution or 'N/A'}")
+            if row.ORCID:
+                 st.markdown(f"**ORCID:** [{row.ORCID}](https://orcid.org/{row.ORCID})")
+            if row.Theme and len(theme_labels) > 1:
+                st.caption(f"Theme: {row.Theme}")
+        with col2:
+            st.metric("Match Score", f"{row.Score:.2%}")
+
+        with st.expander("Match Explanation (Click to see details)"):
+            
+            theme = next((th for th in themes if th["theme_label"] == row.Theme), None)
+            if not theme:
+                continue
+
+            query_emb = np.array(model.encode([theme["combined_text"]], normalize_embeddings=True)[0])
+            
+            st.markdown("**Researcher's Profile Keywords:**")
+            profile_keywords = getattr(row, 'Profile_Keywords', [])
+            if profile_keywords:
+                st.write(f"_{', '.join(profile_keywords)}_")
+            else:
+                st.write("_No keywords computed for this profile._")
+
+            researcher_pubs = row.Publications if hasattr(row, 'Publications') else []
+            if not researcher_pubs:
+                st.write("**Publications:** _No publications found._")
+                continue
+            
+            pub_count = len(researcher_pubs)
+            st.markdown(f"**Publications ({pub_count} total, sorted by relevance to query):**")
+
+            pubs_with_embeddings = []
+            for pub in researcher_pubs:
+                if pub.get("embedding"):
+                    pubs_with_embeddings.append(pub)
+
+            if not pubs_with_embeddings:
+                 researcher_pubs.sort(key=lambda x: x.get('year') or 0, reverse=True)
+                 for pub in researcher_pubs:
+                     doi_text = f" (DOI: {pub.get('doi')})" if pub.get('doi') else ""
+                     st.markdown(f"– {pub.get('title', 'No Title')} ({pub.get('year', 'N/A')}){doi_text}")
+                 continue
+
+            pub_embeddings = np.array([p["embedding"] for p in pubs_with_embeddings])
+            sims = np.dot(pub_embeddings, query_emb.T).ravel()
+            
+            for i, pub in enumerate(pubs_with_embeddings):
+                 pub['similarity_score'] = sims[i]
+
+            pubs_with_embeddings.sort(key=lambda x: x['similarity_score'], reverse=True)
+
+            for pub in pubs_with_embeddings:
+                doi_text = f" (DOI: {pub.get('doi')})" if pub.get('doi') else ""
+                st.markdown(f"– {pub.get('title', 'No Title')} ({pub.get('year', 'N/A')}){doi_text}")
+
 else:
-    st.info("Set query and click **Search to find matches**")
+    st.info("Enter your request and click **Search** to discover researchers.")
