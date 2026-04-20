@@ -59,7 +59,12 @@ def load_model_cached(name: str):
 @st.cache_resource(show_spinner=False)
 def load_spacy_cached():
     import spacy
-    nlp = spacy.load("en_core_web_sm", disable=["ner"])
+    import spacy.cli
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=["ner"])
+    except OSError:
+        spacy.cli.download("en_core_web_sm")
+        nlp = spacy.load("en_core_web_sm", disable=["ner"])
     nlp.max_length = 2_000_000
     return nlp
 
