@@ -16,14 +16,6 @@ from database import get_collection, insert_profiles, compute_embeddings
 
 st.set_page_config(page_title="ResearchMatch", layout="wide", initial_sidebar_state="collapsed")
 
-# Hide sidebar completely on the public app
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] { display: none; }
-        [data-testid="collapsedControl"] { display: none; }
-    </style>
-""", unsafe_allow_html=True)
-
 # ── Config from Streamlit Secrets ─────────────────────────────────────────────
 mongo_uri  = st.secrets.get("MONGO_URI", "")
 db_name    = st.secrets.get("DB_NAME",   "researchmatch")
