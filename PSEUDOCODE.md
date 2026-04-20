@@ -1,16 +1,81 @@
 # Pseudocode Documentation
 
-This document provides a pseudocode for the main algorithms in Researchmatch, reflecting the final cloud-native architecture with pre-computed publication embeddings and search result caching.
+This document provides a pseudocode for the main algorithms in ResearchMatch, reflecting the final cloud-native architecture with multi-source parallel API ingestion, safe `tempfile` processing, pre-computed publication embeddings, and search result caching.
 
-1. Researcher Matching Algorithm (using Vector Search with Caching)
+## 1. Multi-Source Parallel Corpus Ingestion
 
-This algorithm runs when a user performs a search. It is extremely fast for cached results and memory-efficient.
+This algorithm speeds up database building by querying multiple academic APIs simultaneously (OpenAlex, Semantic Scholar, arXiv, PubMed) and mapping their distinct schemas into a unified Profile structure.
 
-FUNCTION match_researchers_with_vector_search(query_text, database_collection, top_k, cache_enabled=True):
+```text
+FUNCTION build_corpus_from_keywords(topic, API_flags):
+    INPUT: A search topic (e.g. 'machine learning').
+           Toggles indicating which APIs to query (OpenAlex, Semantic Scholar, etc.).
+    OUTPUT: A merged, standardized list of researcher profiles.
+    
+    STEP 1: Define API adapter functions for each target source.
+        FUNCTION fetch_openalex():
+            - Query OpenAlex works endpoint.
+            - Enrich matching DOIs with CrossRef data.
+            - Transform into standardized dict.
+            - Return profiles.
+            
+        FUNCTION fetch_semantic_scholar():
+            - Query Semantic Scholar Graph API.
+            - Transform into standardized dict.
+            - Return profiles.
+            
+        (Repeat adapter logic for arXiv and PubMed depending on flags)
+
+    STEP 2: Initialize a parallel ThreadPoolExecutor.
+        pool = ThreadPoolExecutor(max_workers=4)
+        active_fetchers = Set of enabled adapter functions based on API_flags
+        
+    STEP 3: Execute in parallel.
+        futures = map(pool.submit, active_fetchers)
+        
+    STEP 4: Await completion and merge profiles into a global list.
+        all_profiles = []
+        FOR future IN futures (as completed):
+            all_profiles.extend(future.result())
+            
+    STEP 5: Add DOAJ open-access records (synchronously if requested).
+        IF doaj_enabled:
+            all_profiles.extend(scrape_doaj(topic))
+            
+    RETURN all_profiles
+```
+
+## 2. Cloud-Safe Document Processing Algorithm
+
+This protects the Streamlit Community Cloud server from crashing during concurrent file uploads.
+
+```text
+FUNCTION safe_file_upload(uploaded_file):
+    INPUT: A binary file stream uploaded via Streamlit.
+    OUTPUT: A safe, uniquely named temporary file path, securely handled.
+    
+    STEP 1: Check file size against cloud limits.
+        IF file.size > 50MB:
+            Reject upload to prevent Out-Of-Memory (OOM) errors.
+            
+    STEP 2: Generate a secure, randomized temporary file path.
+        temp_path = create_named_temp_file(suffix=file_extension, delete=False)
+        
+    STEP 3: Write chunks to disk securely.
+        stream chunks to temp_path
+        
+    STEP 4: Return path to the text extraction pipeline.
+        RETURN temp_path
+```
+
+## 3. Researcher Matching Algorithm (using Vector Search)
+
+This algorithm runs when a user performs a search. It leverages MongoDB Atlas Vector Search for instant semantic matching.
+
+```text
+FUNCTION match_researchers_with_vector_search(query_text, top_k):
     INPUT: A string of text representing the user's query.
-           A connection to the MongoDB collection.
            The number of top matches to return.
-           Whether to use result caching.
     OUTPUT: A list of the top_k most similar researcher profiles.
     
     STEP 1: Encode the user's query into a vector embedding.
@@ -20,21 +85,21 @@ FUNCTION match_researchers_with_vector_search(query_text, database_collection, t
         pipeline = [
             {
                 "$vectorSearch": {
-                    "index": "default_vector_index", // The pre-built index in Atlas
+                    "index": "default_vector_index", 
                     "queryVector": query_embedding,
-                    "path": "embedding",            // The field containing main profile embeddings
+                    "path": "embedding",            
                     "limit": top_k,
                     "numCandidates": top_k * 15     // Search more to improve accuracy
                 }
             },
             {
-                "$project": { // Request the fields needed for display + the score
+                "$project": { 
                     "name": 1, 
                     "institution": 1,
-                    "orcid": 1, // Include ORCID
-                    "publications": 1, // Include full publication list with pre-computed embeddings
+                    "orcid": 1, 
+                    "publications": 1, 
                     "profile_keywords": 1,
-                    "score": { "$meta": "vectorSearchScore" } // The main profile match score
+                    "score": { "$meta": "vectorSearchScore" } 
                 }
             }
         ]
@@ -42,18 +107,14 @@ FUNCTION match_researchers_with_vector_search(query_text, database_collection, t
     STEP 3: Execute the pipeline on the database.
         results = database_collection.aggregate(pipeline)
         
-    STEP 4: Cache the results for future use (if caching enabled).
-        IF cache_enabled:
-            cache[cache_key] = results (with 24-hour expiration)
-        
-    STEP 5: Return the results provided by the database.
-        RETURN list(results)
+    RETURN list(results)
+```
 
+## 4. Document Clustering Algorithm
 
-2. Document Clustering Algorithm
+This algorithm is used to group multiple user-uploaded documents into themes before matching them semantically against the database.
 
-This algorithm is used to group multiple user-uploaded documents into themes before matching.
-
+```text
 FUNCTION cluster_documents(document_texts, model):
     INPUT: A list of text content from uploaded documents.
            The sentence-transformer model.
@@ -65,7 +126,7 @@ FUNCTION cluster_documents(document_texts, model):
     STEP 2: Find the optimal number of clusters (k) using the silhouette score.
         best_k = determine_optimal_k_via_silhouette(embeddings)
                 
-    STEP 3: Perform clustering with the optimal k (e.g., Agglomerative Clustering).
+    STEP 3: Perform clustering with the optimal k.
         IF best_k == 1:
             RETURN a single theme containing all documents.
         ELSE:
@@ -82,12 +143,13 @@ FUNCTION cluster_documents(document_texts, model):
             themes.append({ theme_label: keywords, combined_text: combined_text })
             
     RETURN themes
+```
 
+## 5. Embedding Computation Algorithm (Precomputation)
 
-3. Embedding Computation Algorithm (Precomputation)
+This is the long-running administrative task used to process the corpus in the Admin UI.
 
-This is the long-running administrative task used to process the corpus. It now computes embeddings for profiles AND individual publications.
-
+```text
 FUNCTION compute_embeddings(collection, model, nlp):
     INPUT: The MongoDB collection, embedding model, and NLP model.
     OUTPUT: The total count of processed profiles.
@@ -95,7 +157,7 @@ FUNCTION compute_embeddings(collection, model, nlp):
     STEP 1: Define the query to find documents needing processing.
         query = find documents where profile embedding OR profile keywords OR any publication embedding is missing.
     
-    STEP 2: Process documents in large, independent chunks (e.g., 500).
+    STEP 2: Process documents in independent chunks (e.g., 200).
         WHILE more documents match the query:
             
             STEP 2a: Fetch a new chunk of documents using .limit().
@@ -104,7 +166,6 @@ FUNCTION compute_embeddings(collection, model, nlp):
             STEP 2b: Prepare update operations for this chunk.
                 updates = []
                 FOR each doc in chunk_docs:
-                    
                     - Combine profile texts.
                     - IF profile text exists AND needs embedding/keywords:
                         - Compute profile embedding.
@@ -122,8 +183,4 @@ FUNCTION compute_embeddings(collection, model, nlp):
                 collection.bulk_write(updates)
 
     RETURN total_processed_count
-
-
-4. Match Explanation and Publication Sorting
-
-This happens within the Streamlit app when a user expands a result.
+```
