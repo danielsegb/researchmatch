@@ -17,7 +17,7 @@ pymongo[srv]==4.5.0
 
 #Document Processing
 
-PyMuPDF==1.23.3
+PyMuPDF
 python-docx==1.1.2
 
 #Web Scraping & API Requests

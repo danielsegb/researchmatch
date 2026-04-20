@@ -16,6 +16,20 @@ from database import get_collection, insert_profiles, compute_embeddings
 
 st.set_page_config(page_title="ResearchMatch", layout="wide", initial_sidebar_state="collapsed")
 
+# Hide sidebar completely on the public app
+st.markdown("""
+    <style>
+        [data-testid="stSidebar"] { display: none; }
+        [data-testid="collapsedControl"] { display: none; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ── Config from Streamlit Secrets ─────────────────────────────────────────────
+mongo_uri  = st.secrets.get("MONGO_URI", "")
+db_name    = st.secrets.get("DB_NAME",   "researchmatch")
+coll_name  = st.secrets.get("COLL_NAME", "researchers")
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
 LOGO_SVG = """
 <svg width="100" height="100" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2ZM18 20H6V4H13V9H18V20Z" fill="#cccccc"/>
@@ -54,60 +68,13 @@ def load_spacy_cached():
     nlp.max_length = 2000000
     return nlp
 
-with st.sidebar:
-    st.header("Admin Panel")
-    mongo_uri = st.text_input("MongoDB URI", "mongodb+srv://researchmatch_user:jqz_2Pe4HbUsjgu@cluster0.xiw7sji.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-    db_name, coll_name = st.text_input("Database Name", "researchmatch"), st.text_input("Collection Name", "researchers")
-    uploads_folder = st.text_input("Local Uploads Folder", "uploads")
-    model_name = st.text_input("Embedding Model", "sentence-transformers/all-MiniLM-L6-v2")
-    
-    with st.expander("Build Corpus"):
-        topic = st.text_input("Topic", key="topic")
-        c1, c2 = st.columns(2)
-        pages = c1.number_input("OpenAlex Pages", 1, 20, 2)
-        doaj_pages = c1.number_input("DOAJ Pages", 0, 5, 0)
-        per_page = c2.number_input("Results Per Page", 10, 200, 25)
-        upload_pages = c2.number_input("Pages per Upload", 1, 5, 1)
-        run_build = st.button("Process Build", key="run_build")
-    
-    with st.expander("Precompute Embeddings"):
-        run_precompute = st.button("Compute Embeddings", key="run_precompute")
 
-if run_build:
-    model, nlp = load_model_cached(model_name), load_spacy_cached()
-    coll = get_collection(mongo_uri, db_name, coll_name)
-    if coll is not None:
-        all_profiles, stats = [], {"openalex": 0, "doaj": 0, "uploads": 0}
-        if topic:
-            profiles = build_corpus_from_keywords(topic, pages, per_page, doaj_pages, st.sidebar.progress(0.0, text="Querying APIs..."))
-            all_profiles.extend(profiles)
-            stats["openalex"] = len(profiles)
-        if os.path.exists(uploads_folder):
-            st.sidebar.text(f"Scanning '{uploads_folder}'...")
-            for fname in os.listdir(uploads_folder):
-                fpath = os.path.join(uploads_folder, fname)
-                if not os.path.isfile(fpath): continue
-                if text := extract_text(fpath):
-                    profiles, _ = discover_profiles_from_upload(text, upload_pages, per_page, fname, model, nlp)
-                    all_profiles.extend(profiles)
-                    stats["uploads"] += len(profiles)
-        inserted, skipped = insert_profiles(coll, all_profiles)
-        st.sidebar.success(f"Inserted: {inserted}, Skipped: {skipped}")
-        for k, v in stats.items(): st.sidebar.metric(k.title(), v)
-
-if run_precompute:
-    model, nlp, coll = load_model_cached(model_name), load_spacy_cached(), get_collection(mongo_uri, db_name, coll_name)
-    if coll is not None:
-        progress_bar = st.sidebar.progress(0.0)
-        status_text = st.sidebar.empty()
-        
-        def update_progress(progress):
-            progress_bar.progress(min(progress, 1.0))
-            status_text.info(f"Computing embeddings... {int(progress * 100)}%")
-        
-        count = compute_embeddings(coll, model, nlp, progress_callback=update_progress)
-        progress_bar.progress(1.0)
-        status_text.success(f"Processed {count:,} profiles.")
+if not mongo_uri:
+    st.error(
+        "⚠️ Database connection is not configured. "
+        "Please contact the administrator or set `MONGO_URI` in Streamlit Secrets."
+    )
+    st.stop()
 
 st.subheader("Match Researchers")
 ups = st.file_uploader("Upload PDF/DOCX", type=["pdf", "docx"], accept_multiple_files=True)
