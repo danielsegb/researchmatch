@@ -91,7 +91,7 @@ kw_text = st.text_area("Keywords / Abstract", "")
 col_a, col_b, col_c = st.columns([1, 1, 1])
 top_k = col_a.slider("Number of Results", 5, 50, 15)
 sort_opt = col_b.selectbox("Sort Results By", ["Match Score (desc)", "Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
-deep_live_search = col_c.checkbox("Deep Live Search", value=False, help="Dynamically searches real-time data.")
+deep_live_search = col_c.checkbox("Deep Live Search", value=False, help="Dynamically searches real-time data (this may take a while).")
 run_match = st.button("Search")
 
 if run_match:
