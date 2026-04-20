@@ -8,7 +8,7 @@ numpy
 
 sentence-transformers==2.7.0
 scikit-learn
-spacy
+spacy==3.7.4
 huggingface-hub<1.0
 
 #Database
@@ -35,6 +35,5 @@ torch
 
 torchvision
 
-#Additional spaCy model (install separately)
-
-#python -m spacy download en_core_web_sm
+#Additional spaCy model (installed via wheel to bypass SCC permissions)
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
