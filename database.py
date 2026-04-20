@@ -51,13 +51,22 @@ def insert_profiles(coll, profiles: List[Dict]) -> Tuple[int, int]:
     if not deduped:
         return 0, skipped
     
+    operations = []
+    for p in deduped:
+        pub_list = p.pop("publications", [])
+        query = {"name": p.get("name"), "orcid": p.get("orcid")}
+        # On insert, set the base profile. On both insert and update, append any new publications.
+        update = {
+            "$setOnInsert": p,
+            "$addToSet": {"publications": {"$each": pub_list}}
+        }
+        operations.append(UpdateOne(query, update, upsert=True))
+        
     try:
-        result = coll.insert_many(deduped, ordered=False)
-        return len(result.inserted_ids), skipped
+        result = coll.bulk_write(operations, ordered=False)
+        return result.upserted_count, skipped
     except Exception as e:
-        logger.warning(f"Bulk insertion error: {e}")
-        if hasattr(e, 'details') and 'nInserted' in e.details:
-            return e.details['nInserted'], skipped + (len(deduped) - e.details['nInserted'])
+        logger.warning(f"Bulk upsert error: {e}")
         return 0, skipped + len(deduped)
 
 def compute_embeddings(coll, model, nlp, batch_size: int = 32, progress_callback=None) -> int:
