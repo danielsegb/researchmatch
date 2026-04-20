@@ -60,6 +60,23 @@ def load_spacy_cached():
     nlp.max_length = 2000000
     return nlp
 
+@st.cache_data(show_spinner=False, max_entries=50)
+def process_upload_bytes(file_bytes: bytes, file_name: str) -> str:
+    import tempfile
+    import os
+    ext = ".pdf" if file_name.lower().endswith(".pdf") else ".docx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        from core import extract_text, normalize_ws
+        return normalize_ws(extract_text(tmp_path))
+    finally:
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
+
 
 if not mongo_uri:
     st.error(
@@ -71,9 +88,10 @@ if not mongo_uri:
 st.subheader("Match Researchers")
 ups = st.file_uploader("Upload PDF/DOCX", type=["pdf", "docx"], accept_multiple_files=True)
 kw_text = st.text_area("Keywords / Abstract", "")
-col_a, col_b = st.columns(2)
+col_a, col_b, col_c = st.columns([1, 1, 1])
 top_k = col_a.slider("Number of Results", 5, 50, 15)
 sort_opt = col_b.selectbox("Sort Results By", ["Match Score (desc)", "Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
+deep_live_search = col_c.checkbox("Deep Live Search (Auto-learn)", value=True, help="Dynamically searches real-time APIs to inject brand new researchers into the database before showing results.")
 run_match = st.button("Search")
 
 if run_match:
@@ -83,12 +101,9 @@ if run_match:
     raw_texts = []
     if ups:
         for up in ups:
-            if tmp_path := safe_file_upload(up):
-                raw_texts.append(normalize_ws(extract_text(tmp_path)))
-                try:
-                    os.remove(tmp_path)
-                except:
-                    pass
+            text = process_upload_bytes(up.getvalue(), up.name)
+            if text:
+                raw_texts.append(text)
     
     model, nlp, coll = load_model_cached(model_name), load_spacy_cached(), get_collection(mongo_uri, db_name, coll_name)
     
@@ -109,6 +124,28 @@ if run_match:
                 st.stop()
             themes = [{"theme_label": ", ".join(derive_top_keywords_hybrid(combined_text, k=3, model=model, nlp=nlp)) or "Primary Theme",
                       "doc_indices": [], "combined_text": combined_text}]
+        
+        # --- Live Hybrid Retrieval (Dynamic Ingestion) ---
+        if deep_live_search:
+            # Pick the primary search topic
+            search_topic = kw_text.strip() if kw_text.strip() else themes[0]["theme_label"]
+            if search_topic and search_topic != "Primary Theme":
+                with st.spinner(f"Scraping live internet data for '{search_topic}'... (this takes 15-30s)"):
+                    try:
+                        live_profiles = build_corpus_from_keywords(
+                            topic=search_topic, pages=1, per_page=15, doaj_pages=0, 
+                            progress_callback=None, use_openalex=True, use_semantic_scholar=True, 
+                            use_arxiv=True, use_pubmed=True
+                        )
+                        if live_profiles:
+                            # Tag them logically and inject into the DB dynamically
+                            inserted, _ = insert_profiles(coll, live_profiles)
+                            if inserted > 0:
+                                # Process the embedded math so they organically pop up in Vector Search instantly
+                                compute_embeddings(coll, model, nlp, batch_size=32)
+                    except Exception as e:
+                        st.sidebar.error(f"Live Auto-learn failed: {e}")
+        # -------------------------------------------------
         
         all_rows = []
         for th in themes:
