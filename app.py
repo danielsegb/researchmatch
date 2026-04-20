@@ -91,7 +91,7 @@ kw_text = st.text_area("Keywords / Abstract", "")
 col_a, col_b, col_c = st.columns([1, 1, 1])
 top_k = col_a.slider("Number of Results", 5, 50, 15)
 sort_opt = col_b.selectbox("Sort Results By", ["Match Score (desc)", "Last Publication Year (desc)", "Publication Count (desc)", "Name (A→Z)"])
-deep_live_search = col_c.checkbox("Deep Live Search (Auto-learn)", value=True, help="Dynamically searches real-time APIs to inject brand new researchers into the database before showing results.")
+deep_live_search = col_c.checkbox("Deep Live Search", value=False, help="Dynamically searches real-time APIs to inject brand new researchers into the database before showing results.")
 run_match = st.button("Search")
 
 if run_match:
@@ -130,7 +130,7 @@ if run_match:
             # Pick the primary search topic
             search_topic = kw_text.strip() if kw_text.strip() else themes[0]["theme_label"]
             if search_topic and search_topic != "Primary Theme":
-                with st.spinner(f"Scraping live internet data for '{search_topic}'... (this takes 15-30s)"):
+                with st.spinner(f"Searching live internet data for '{search_topic}'... (this may take a while)"):
                     try:
                         live_profiles = build_corpus_from_keywords(
                             topic=search_topic, pages=1, per_page=15, doaj_pages=0, 
