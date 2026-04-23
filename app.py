@@ -17,10 +17,11 @@ from database import get_collection, insert_profiles, compute_embeddings
 st.set_page_config(page_title="ResearchMatch", layout="wide", initial_sidebar_state="collapsed")
 
 # ── Config from Streamlit Secrets ─────────────────────────────────────────────
-mongo_uri  = st.secrets.get("MONGO_URI", "")
-db_name    = st.secrets.get("DB_NAME",   "researchmatch")
-coll_name  = st.secrets.get("COLL_NAME", "researchers")
-model_name = "sentence-transformers/all-MiniLM-L6-v2"
+mongo_uri    = st.secrets.get("MONGO_URI", "")
+db_name      = st.secrets.get("DB_NAME",   "researchmatch")
+coll_name    = st.secrets.get("COLL_NAME", "researchers")
+s2_api_key   = st.secrets.get("S2_API_KEY", None)
+model_name   = "sentence-transformers/all-MiniLM-L6-v2"
 
 LOGO_SVG = """
 <svg width="100" height="100" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -122,7 +123,14 @@ if run_match:
             if not combined_text:
                 st.warning("Please enter keywords or upload files to start a search.")
                 st.stop()
-            themes = [{"theme_label": ", ".join(derive_top_keywords_hybrid(combined_text, k=3, model=model, nlp=nlp)) or "Primary Theme",
+            extracted_kws = derive_top_keywords_hybrid(combined_text, k=3, model=model, nlp=nlp)
+            if not extracted_kws and not raw_texts:
+                st.warning(
+                    "⚠️ No recognisable research terms found in your query. "
+                    "Please use real keywords, a research abstract, or upload a paper."
+                )
+                st.stop()
+            themes = [{"theme_label": ", ".join(extracted_kws) or "Primary Theme",
                       "doc_indices": [], "combined_text": combined_text}]
         
         # --- Live Hybrid Retrieval (Dynamic Ingestion) ---
@@ -133,9 +141,9 @@ if run_match:
                 with st.spinner(f"Searching live internet data for '{search_topic}'... (this may take a while)"):
                     try:
                         live_profiles = build_corpus_from_keywords(
-                            topic=search_topic, pages=1, per_page=15, doaj_pages=0, 
-                            progress_callback=None, use_openalex=True, use_semantic_scholar=True, 
-                            use_arxiv=True, use_pubmed=True
+                            topic=search_topic, pages=1, per_page=15, doaj_pages=0,
+                            progress_callback=None, use_openalex=True, use_semantic_scholar=True,
+                            use_arxiv=True, use_pubmed=True, s2_api_key=s2_api_key
                         )
                         if live_profiles:
                             # Tag them logically and inject into the DB dynamically
@@ -153,14 +161,16 @@ if run_match:
             
             try:
                 # Perform vector search
+                MIN_SCORE_THRESHOLD = 0.40  # filter out truly unrelated profiles
                 aggregation_pipeline = [
                     {"$vectorSearch": {
                         "index": "default_vector_index", "queryVector": query_embedding,
-                        "path": "embedding", "numCandidates": top_k * 15, "limit": top_k}}  # 15x candidates for better recall
-                    ,
+                        "path": "embedding", "numCandidates": top_k * 15, "limit": top_k * 3}},  # fetch extra so threshold can trim
                     {"$project": {
                         "_id": 1, "name": 1, "institution": 1, "orcid": 1,
-                        "profile_keywords": 1, "score": {"$meta": "vectorSearchScore"}}}
+                        "profile_keywords": 1, "score": {"$meta": "vectorSearchScore"}}},
+                    {"$match": {"score": {"$gte": MIN_SCORE_THRESHOLD}}},
+                    {"$limit": top_k},
                 ]
                 results = list(coll.aggregate(aggregation_pipeline))
             except Exception as e:

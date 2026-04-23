@@ -90,7 +90,13 @@ def compute_embeddings(coll, model, nlp, batch_size: int = 32, progress_callback
     logger.info(f"Starting embedding computation for {total_docs_to_process} profiles...")
 
     while True:
-        cursor = coll.find(query, {"_id": 1, "publications": 1}).limit(chunk_size)
+        cursor = coll.find(query, {
+            "_id": 1,
+            "publications.title": 1,
+            "publications.abstract": 1,
+            "publications.full_text": 1,
+            "publications.embedding": 1,
+        }).limit(chunk_size)
         docs_in_chunk = list(cursor)
         
         if not docs_in_chunk:

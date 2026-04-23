@@ -42,9 +42,10 @@ if st.button("🚪 Logout", key="logout_btn"):
 st.markdown("---")
 
 # ── Secrets / config ──────────────────────────────────────────────────────────
-mongo_uri   = st.secrets.get("MONGO_URI", "")
+mongo_uri    = st.secrets.get("MONGO_URI", "")
 ncbi_api_key = st.secrets.get("NCBI_API_KEY", None)
-model_name  = "sentence-transformers/all-MiniLM-L6-v2"
+s2_api_key   = st.secrets.get("S2_API_KEY", None)
+model_name   = "sentence-transformers/all-MiniLM-L6-v2"
 
 if not mongo_uri:
     st.error("⚠️ `MONGO_URI` is not set in Streamlit Secrets. Please configure it and redeploy.")
@@ -119,6 +120,7 @@ if run_build:
                         use_arxiv=use_arxiv,
                         use_pubmed=use_pubmed,
                         ncbi_api_key=ncbi_api_key,
+                        s2_api_key=s2_api_key,
                     )
                     progress_ph.progress(1.0)
                     all_profiles.extend(profiles)

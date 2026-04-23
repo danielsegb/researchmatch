@@ -169,15 +169,33 @@ def enrich_with_crossref(publications: List[Dict], progress=None) -> List[Dict]:
 
 
 # ── Semantic Scholar ──────────────────────────────────────────────────────────
-def query_semantic_scholar(topic: str, limit: int = 100) -> List[Dict]:
-    """Query the Semantic Scholar Graph API for papers matching a topic."""
+def query_semantic_scholar(
+    topic: str, limit: int = 100, api_key: Optional[str] = None
+) -> List[Dict]:
+    """Query the Semantic Scholar Graph API for papers matching a topic.
+
+    Args:
+        topic:   Search query string.
+        limit:   Maximum number of papers to return.
+        api_key: Optional S2 API key sent as the ``x-api-key`` request header.
+                 Authenticated requests must stay under 1 request/second.
+    """
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
     fields = "title,abstract,year,authors,externalIds,venue"
     results, offset, batch_size = [], 0, min(100, limit)
+
+    # Build per-request headers: include the API key when provided.
+    req_headers = dict(HEADERS)
+    if api_key:
+        req_headers["x-api-key"] = api_key
+
+    # S2 enforces 1 req/s for authenticated keys; 1.1 s keeps us safely under.
+    ss_delay = 1.1 if api_key else API_DELAY
+
     while offset < limit:
         params = {"query": topic, "offset": offset, "limit": batch_size, "fields": fields}
         try:
-            r = requests.get(base_url, params=params, timeout=API_TIMEOUT, headers=HEADERS)
+            r = requests.get(base_url, params=params, timeout=API_TIMEOUT, headers=req_headers)
             r.raise_for_status()
             batch = r.json().get("data", [])
             results.extend(batch)
@@ -187,7 +205,7 @@ def query_semantic_scholar(topic: str, limit: int = 100) -> List[Dict]:
         except Exception as e:
             logger.error(f"Semantic Scholar query failed: {e}")
             break
-        time.sleep(API_DELAY)
+        time.sleep(ss_delay)
     return results
 
 

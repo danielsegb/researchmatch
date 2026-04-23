@@ -180,6 +180,7 @@ def build_corpus_from_keywords(
     use_arxiv: bool = True,
     use_pubmed: bool = True,
     ncbi_api_key: Optional[str] = None,
+    s2_api_key: Optional[str] = None,
 ) -> List[Dict]:
     """Query all enabled academic APIs in parallel, tag and merge results."""
     if not topic:
@@ -196,7 +197,7 @@ def build_corpus_from_keywords(
         return p
 
     def fetch_ss() -> List[Dict]:
-        r = query_semantic_scholar(topic, limit=limit)
+        r = query_semantic_scholar(topic, limit=limit, api_key=s2_api_key)
         p = semantic_scholar_to_profiles(r)
         tag_publications(p, source="Semantic Scholar", topic=topic)
         return p
