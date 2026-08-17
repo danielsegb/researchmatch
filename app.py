@@ -13,6 +13,29 @@ from core import normalize_ws, extract_text, safe_file_upload
 from services import derive_top_keywords_hybrid, cluster_upload_docs, discover_profiles_from_upload
 from services import build_corpus_from_keywords
 from database import get_collection, insert_profiles, compute_embeddings
+import streamlit as st
+
+st.set_page_config(
+    page_title="ResearchMatch",
+    page_icon="🔍",
+    layout="wide"  # Use full width instead of centered column
+)
+
+st.markdown("""
+<style>
+    /* Hide Streamlit header & footer */
+    header, footer, #MainMenu { visibility: hidden !important; height: 0 !important; }
+    
+    /* Remove default large top margin */
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 2rem !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+        max-width: 100% !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.set_page_config(page_title="ResearchMatch", layout="wide", initial_sidebar_state="collapsed")
 
