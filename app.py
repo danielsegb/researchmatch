@@ -22,13 +22,24 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Hide Streamlit header & footer */
-    header, footer, #MainMenu { visibility: hidden !important; height: 0 !important; }
+    /* Hide Streamlit header, footer, badges & watermark */
+    header, footer, #MainMenu, [data-testid="stHeader"], [data-testid="stFooter"], [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"], .stDeployButton, #manage-app-button {
+        visibility: hidden !important;
+        display: none !important;
+        height: 0 !important;
+        opacity: 0 !important;
+    }
+    
+    div[class*="viewerBadge"], div[class*="StyledFooter"], div[class*="viewerBadge_container"] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+    }
     
     /* Remove default large top margin */
     .block-container {
         padding-top: 1.5rem !important;
-        padding-bottom: 2rem !important;
+        padding-bottom: 1.5rem !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;
         max-width: 100% !important;
