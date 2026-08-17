@@ -327,8 +327,8 @@ else:
 st.markdown("<br><br><br>", unsafe_allow_html=True)
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 0.8em;'>"
-    "&copy; 2026 <a href='https://danielse.com' target='_blank' style='text-decoration: none; color: inherit;'>"
-    "DANIELSE</a>. All rights reserved."
+    "&copy; 2026 <a href='https://advantcore.co' target='_blank' style='text-decoration: none; color: inherit;'>"
+    "Advantcore</a>. All rights reserved."
     "</div>", 
     unsafe_allow_html=True
 )
